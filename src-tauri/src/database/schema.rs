@@ -116,6 +116,19 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS session_overrides (
+                provider_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                custom_title TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (provider_id, session_id, source_path)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         // 8. Proxy Config 表（三行结构，app_type 主键）
         conn.execute("CREATE TABLE IF NOT EXISTS proxy_config (
             app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini')),
@@ -337,6 +350,23 @@ impl Database {
         Ok(())
     }
 
+    fn migrate_v6_to_v7(conn: &Connection) -> Result<(), AppError> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS session_overrides (
+                provider_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                custom_title TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (provider_id, session_id, source_path)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("Failed to create session_overrides table: {e}")))?;
+
+        Ok(())
+    }
+
     /// 应用 Schema 迁移
     pub(crate) fn apply_schema_migrations(&self) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
@@ -392,6 +422,11 @@ impl Database {
                         log::info!("迁移数据库从 v5 到 v6（使用量聚合表 + Copilot 模板类型统一）");
                         Self::migrate_v5_to_v6(conn)?;
                         Self::set_user_version(conn, 6)?;
+                    }
+                    6 => {
+                        log::info!("杩佺Щ鏁版嵁搴撲粠 v6 鍒?v7锛堜細璇濊嚜瀹氫箟鍚嶇О鎸佷箙鍖栵級");
+                        Self::migrate_v6_to_v7(conn)?;
+                        Self::set_user_version(conn, 7)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
