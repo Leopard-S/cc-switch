@@ -350,21 +350,24 @@ impl Database {
         Ok(())
     }
 
-    fn migrate_v6_to_v7(conn: &Connection) -> Result<(), AppError> {
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS session_overrides (
-                provider_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                source_path TEXT NOT NULL,
-                custom_title TEXT NOT NULL,
-                updated_at INTEGER NOT NULL,
-                PRIMARY KEY (provider_id, session_id, source_path)
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(format!("Failed to create session_overrides table: {e}")))?;
+    fn is_backward_compatible_v7(conn: &Connection) -> Result<bool, AppError> {
+        if !Self::table_exists(conn, "session_overrides")? {
+            return Ok(false);
+        }
 
-        Ok(())
+        for column in [
+            "provider_id",
+            "session_id",
+            "source_path",
+            "custom_title",
+            "updated_at",
+        ] {
+            if !Self::has_column(conn, "session_overrides", column)? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
     }
 
     /// 应用 Schema 迁移
@@ -379,6 +382,14 @@ impl Database {
             .map_err(|e| AppError::Database(format!("开启迁移 savepoint 失败: {e}")))?;
 
         let mut version = Self::get_user_version(conn)?;
+
+        if version == SCHEMA_VERSION + 1 && Self::is_backward_compatible_v7(conn)? {
+            log::info!(
+                "Detected backward-compatible schema v{version}; normalizing user_version back to v{SCHEMA_VERSION}"
+            );
+            Self::set_user_version(conn, SCHEMA_VERSION)?;
+            version = SCHEMA_VERSION;
+        }
 
         if version > SCHEMA_VERSION {
             conn.execute("ROLLBACK TO schema_migration;", []).ok();
@@ -422,11 +433,6 @@ impl Database {
                         log::info!("迁移数据库从 v5 到 v6（使用量聚合表 + Copilot 模板类型统一）");
                         Self::migrate_v5_to_v6(conn)?;
                         Self::set_user_version(conn, 6)?;
-                    }
-                    6 => {
-                        log::info!("杩佺Щ鏁版嵁搴撲粠 v6 鍒?v7锛堜細璇濊嚜瀹氫箟鍚嶇О鎸佷箙鍖栵級");
-                        Self::migrate_v6_to_v7(conn)?;
-                        Self::set_user_version(conn, 7)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
